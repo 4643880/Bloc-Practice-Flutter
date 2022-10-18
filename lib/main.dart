@@ -1,8 +1,15 @@
-import 'dart:math';
-
-import 'package:bloc/bloc.dart';
-import 'package:bloc_course_vnd/names_cubit.dart';
+import 'dart:convert';
+import 'dart:io';
+import 'package:bloc_course_vnd/loading_bloc/load_api_bloc.dart';
+import 'package:bloc_course_vnd/loading_bloc/load_api_event.dart';
+import 'package:bloc_course_vnd/loading_bloc/load_api_state.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'dart:developer' as devtools show log;
+
+extension Log on Object {
+  void log() => devtools.log(toString());
+}
 
 void main() {
   runApp(const MyApp());
@@ -13,88 +20,174 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: 'Flutter Demo',
-      theme: ThemeData(
-        primarySwatch: Colors.blue,
+    return BlocProvider(
+      create: (context) => ApiBloc(),
+      child: MaterialApp(
+        debugShowCheckedModeBanner: false,
+        title: 'Flutter Demo',
+        theme: ThemeData(
+          primarySwatch: Colors.blue,
+        ),
+        home: const HomePage(),
       ),
-      home: const HomePage(),
     );
   }
 }
 
-const names = [
-  'foo',
-  'bar',
-  'baz',
-];
+// ================================================================
+// Model Starts Here
+// ================================================================
+@immutable
+class Person {
+  final String name;
+  final int age;
 
-extension RandomElement<String> on Iterable<String> {
-  getRandomElement() {
-    return elementAt(Random().nextInt(length));
+  const Person({required this.name, required this.age});
+
+  Person.fromJson(Map<String, dynamic> json)
+      : name = json['name'] as String,
+        age = json['age'] as int;
+
+  @override
+  String toString() => "Name: $name, Age: $age";
+}
+
+// ================================================================
+// Model Ends Here
+// ================================================================
+
+enum PersonUrl { person1, person2 }
+
+extension UrlString on PersonUrl {
+  String get urlString {
+    switch (this) {
+      case PersonUrl.person1:
+        return "http://192.168.26.180:5500/lib/api/person1.json";
+      case PersonUrl.person2:
+        return "http://192.168.26.180:5500/lib/api/person2.json";
+    }
   }
 }
 
-class HomePage extends StatefulWidget {
+Future<List<Person>> getPersonsApi(String url) {
+  url.log();
+  final result = HttpClient()
+      .getUrl(Uri.parse(url))
+      .then((req) => req.close())
+      .then((res) => res.transform(utf8.decoder).join())
+      .then((jsonString) => json.decode(jsonString) as List<dynamic>)
+      .then((json) => json.map((e) => Person.fromJson(e)).toList());
+  return result;
+}
+
+// extension Subscript<Person> on Iterable<Person> {
+//   Person? operator [](int index) => length > index ? elementAt(index) : null;
+// }
+
+class HomePage extends StatelessWidget {
   const HomePage({Key? key}) : super(key: key);
 
   @override
-  State<HomePage> createState() => _HomePageState();
-}
-
-class _HomePageState extends State<HomePage> {
-  late final NamesCubit _cubit;
-
-  @override
-  void initState() {
-    _cubit = NamesCubit();
-    super.initState();
-  }
-
-  @override
-  void dispose() {
-    _cubit.close();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
+    final a = PersonUrl.person1.urlString;
+    a.log();
     return Scaffold(
       appBar: AppBar(
-        title: Text(names.getRandomElement().toString()),
+        title: BlocBuilder<ApiBloc, FetchResultState?>(
+          builder: (context, state) {
+            return Text("Loaded From Cache: ${state?.isRetrievedFromCache}");
+          },
+        ),
       ),
       body: Center(
-        child: StreamBuilder(
-          stream: _cubit.stream,
-          builder: (context, snapshot) {
-            final button = ElevatedButton(
-                onPressed: () {
-                  _cubit.pickRandomName();
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                ElevatedButton(
+                    onPressed: () {
+                      context.read<ApiBloc>().add(
+                            const LoadPersonsActionOrEvent(
+                              url: PersonUrl.person1,
+                            ),
+                          );
+                    },
+                    child: const Text("Load Json 1")),
+                const SizedBox(
+                  height: 20,
+                  width: 20,
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    context.read<ApiBloc>().add(
+                          const LoadPersonsActionOrEvent(
+                            url: PersonUrl.person2,
+                          ),
+                        );
+                  },
+                  child: const Text("Load Json 2"),
+                ),
+              ],
+            ),
+            Expanded(
+              child: BlocBuilder<ApiBloc, FetchResultState?>(
+                buildWhen: (previousResult, currentResult) {
+                  return previousResult?.persons != currentResult?.persons;
                 },
-                child: const Text("Pick a Random Name"));
-            switch (snapshot.connectionState) {
-              case ConnectionState.none:
-                return button;
-              case ConnectionState.waiting:
-                return button;
-              case ConnectionState.active:
-                return Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      snapshot.data ?? '',
-                      style: const TextStyle(fontSize: 30),
-                    ),
-                    button
-                  ],
-                );
-              case ConnectionState.done:
-                return const SizedBox();
-            }
-          },
+                builder: (context, state) {
+                  final result = state?.persons;
+
+                  if (result == null) {
+                    return const SizedBox();
+                  }
+                  return ListView.builder(
+                    itemCount: state?.persons.length,
+                    itemBuilder: (context, index) {
+                      final result = state?.persons;
+                      return ListTile(
+                        title: Text(result?[index].name ?? ""),
+                        subtitle: Text(result?[index].age.toString() ?? ""),
+                      );
+                    },
+                  );
+                },
+              ),
+            ),
+          ],
         ),
       ),
     );
   }
 }
+
+// extension Subscript<T> on Iterable<T> {
+//   T? operator [](int index) => length > index ? elementAt(index) : null;
+// }
+
+
+
+
+// ==================================================
+// Practice of Extensions in Dart
+// ==================================================
+// Both int and double extennds num class
+// as list and map extends iterable
+
+// extension IntExtension on int {
+//   int addTen() => this + 10;
+// }
+
+// extension DoubleExtension on double {
+//   double addTen() => this + 10;
+// }
+
+// extension Bravo on num {
+//   num addTen() => this + 10;
+// }
+
+// int g = 10.addTen();
+// int h = 10.22.addTen();
+// print(g);
+// print(h);
